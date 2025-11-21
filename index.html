@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>城市環境蒲福風級模擬器</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Arial', sans-serif; }
+        
+        /* 原本風格的 UI */
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.6);
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: none;
+            user-select: none;
+            z-index: 10;
+        }
+        h1 { margin: 0; font-size: 18px; }
+        p { margin: 5px 0 0 0; font-size: 14px; }
+
+        /* 中央下方顯示 */
+        #beaufort-display {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            text-align: center;
+            background: rgba(0,0,0,0.7);
+            padding: 15px 25px;
+            border-radius: 10px;
+            pointer-events: none;
+            user-select: none;
+            z-index: 10;
+            white-space: nowrap;
+        }
+        #beaufort-level {
+            font-size: 6em;
+            font-weight: bold;
+            margin-bottom: 5px;
+            line-height: 1;
+        }
+        #beaufort-speeds {
+            font-size: 1.8em;
+            margin-bottom: 5px;
+            line-height: 1.2;
+        }
+        #beaufort-description {
+            font-size: 1.5em;
+            color: #ccc;
+        }
+
+        /* lil-gui 放大 */
+        .lil-gui {
+            transform: scale(1.2);
+            transform-origin: top right;
+            right: 0px !important; 
+            top: 0px !important;
+            z-index: 11; 
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="info">
+        <h1>蒲福風級模擬器</h1>
+        <p>調整右側面板控制風力</p>
+        <p>中央氣象署 基隆氣象站 製作</p>
+    </div>
+
+    <div id="beaufort-display">
+        <div id="beaufort-level">0</div>
+        <div id="beaufort-speeds"><span id="speed-m-s">&lt; 1 m/s</span> | <span id="speed-knots">&lt; 1 knots</span></div>
+        <div id="beaufort-description">無風</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+        // --- 配置 ---
+        const config = {
+            windLevel: 0,
+            showWindParticles: true,
+            description: "無風",
+            windSpeedDisplay: "< 1 m/s",
+            windSpeedKnots: "< 1 knots"
+        };
+
+        // 蒲福風級表
+        const beaufortScale = [
+            { level: 0, speed_m_s: "0.0 - 0.2", speed_knots: "0", desc: "煙霧直上", intensity: 0.0 },
+            { level: 1, speed_m_s: "0.3 - 1.5", speed_knots: "1 - 3", desc: "煙霧可表示風向，風標不動", intensity: 0.1 },
+            { level: 2, speed_m_s: "1.6 - 3.3", speed_knots: "4 - 6", desc: "風拂過臉頰，樹葉有聲", intensity: 0.2 },
+            { level: 3, speed_m_s: "3.4 - 5.4", speed_knots: "7 - 10", desc: "樹葉及小枝搖動，旌旗招展", intensity: 0.35 },
+            { level: 4, speed_m_s: "5.5 - 7.9", speed_knots: "11 - 16", desc: "地面揚塵、紙片飛舞，小樹幹搖動", intensity: 0.5 },
+            { level: 5, speed_m_s: "8.0 - 10.7", speed_knots: "17 - 21", desc: "有葉之小樹整株搖擺，內陸水面有波紋", intensity: 0.65 },
+            { level: 6, speed_m_s: "10.8 - 13.8", speed_knots: "22 - 27", desc: "大樹枝搖動，電線有呼呼聲", intensity: 0.8 },
+            { level: 7, speed_m_s: "13.9 - 17.1", speed_knots: "28 - 33", desc: "全樹搖動，迎風步行有阻力", intensity: 1.0 },
+            { level: 8, speed_m_s: "17.2 - 20.7", speed_knots: "34 - 40", desc: "小枝吹折，行人不易前行", intensity: 1.3 }, 
+            { level: 9, speed_m_s: "20.8 - 24.4", speed_knots: "41 - 47", desc: "煙囪、屋瓦等將被吹毀", intensity: 1.6 }, 
+            { level: 10, speed_m_s: "24.5 - 28.4", speed_knots: "48 - 55", desc: "陸上不常見，可見拔樹、倒屋等損毀", intensity: 2.0 },
+            { level: 11, speed_m_s: "28.5 - 32.6", speed_knots: "56 - 63", desc: "陸上極少見，見則必有重大災害", intensity: 2.5 },
+            { level: 12, speed_m_s: "32.7+", speed_knots: "64+", desc: "陸上難以估計，必成巨大災害", intensity: 3.5 }
+        ];
+
+        const updatables = [];
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 50, 200);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 400);
+        camera.position.set(0, 25, 60);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.maxPolarAngle = Math.PI * 0.48; // 允許稍微看低一點
+
+        // 燈光
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.8);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(-20, 50, 20);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.left = -100;
+        dirLight.shadow.camera.right = 100;
+        dirLight.shadow.camera.top = 100;
+        dirLight.shadow.camera.bottom = -100;
+        scene.add(dirLight);
+
+        // --- 環境生成 ---
+        function createEnvironment() {
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: 0x3b7d3b }));
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            const road = new THREE.Mesh(new THREE.PlaneGeometry(12, 300), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+            road.rotation.x = -Math.PI / 2;
+            road.position.y = 0.01;
+            road.receiveShadow = true;
+            scene.add(road);
+
+            const lineGeo = new THREE.PlaneGeometry(0.2, 5);
+            const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            for(let i = -15; i < 15; i++) {
+                const line = new THREE.Mesh(lineGeo, lineMat);
+                line.rotation.x = -Math.PI / 2;
+                line.position.set(0, 0.02, i * 10);
+                scene.add(line);
+            }
+        }
+
+        // --- 物件類別 ---
+
+        class Tree {
+            constructor(x, z) {
+                this.group = new THREE.Group();
+                this.initialPos = new THREE.Vector3(x, 0, z);
+                this.group.position.copy(this.initialPos);
+                
+                // 樹幹
+                const trunkHeight = 2 + Math.random() * 2;
+                const trunk = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.2, 0.4, trunkHeight, 8),
+                    new THREE.MeshStandardMaterial({ color: 0x8B4513 })
+                );
+                trunk.position.y = trunkHeight / 2;
+                trunk.castShadow = true;
+                this.group.add(trunk);
+
+                // 樹冠
+                this.leaves = new THREE.Group();
+                const leafMat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(Math.random() * 0.1 + 0.25, 0.8, 0.4) });
+                const levels = 2 + Math.floor(Math.random() * 2);
+                for(let i=0; i<levels; i++) {
+                    const s = 1.5 - i * 0.3;
+                    const cone = new THREE.Mesh(new THREE.ConeGeometry(s, 2, 8), leafMat);
+                    cone.position.y = trunkHeight + i * 1.2;
+                    cone.castShadow = true;
+                    this.leaves.add(cone);
+                }
+                this.group.add(this.leaves);
+                scene.add(this.group);
+
+                this.swayOffset = Math.random() * 100;
+                
+                // 吹走相關變數
+                this.isBlownAway = false;
+                this.velocity = new THREE.Vector3();
+                this.rotationVelocity = new THREE.Vector3();
+            }
+
+            update(time, intensity) {
+                // 10級風特效：吹走樹木
+                if (config.windLevel >= 10 && !this.isBlownAway) {
+                    if (Math.random() < 0.01) { // 隨機觸發
+                        this.isBlownAway = true;
+                        this.velocity.set(0.5 + Math.random()*0.5, 0.2 + Math.random()*0.5, (Math.random()-0.5)*0.2);
+                        this.rotationVelocity.set(Math.random()*0.1, Math.random()*0.1, -Math.random()*0.1);
+                    }
+                }
+
+                if (this.isBlownAway) {
+                    this.group.position.add(this.velocity);
+                    this.group.rotation.x += this.rotationVelocity.x;
+                    this.group.rotation.y += this.rotationVelocity.y;
+                    this.group.rotation.z += this.rotationVelocity.z;
+                    
+                    this.velocity.y -= 0.02; // 重力
+                    this.velocity.x += 0.01; // 風力持續推動
+
+                    // 掉到地底重置
+                    if (this.group.position.y < -20 || this.group.position.x > 150) {
+                        this.reset();
+                    }
+                } else {
+                    // 正常搖擺
+                    const swaySpeed = time * (2 + intensity * 5); 
+                    const baseAngle = (Math.sin(swaySpeed + this.swayOffset) * 0.05 * (1 + intensity * 2));
+                    const windLean = intensity * 0.3; 
+                    this.group.rotation.z = -Math.abs(baseAngle) - windLean;
+                    
+                    if (config.windLevel >= 7) {
+                         this.group.rotation.x = (Math.random() - 0.5) * 0.05 * intensity;
+                    }
+                }
+            }
+
+            reset() {
+                this.isBlownAway = false;
+                this.group.position.copy(this.initialPos);
+                this.group.rotation.set(0,0,0);
+                this.velocity.set(0,0,0);
+                this.rotationVelocity.set(0,0,0);
+            }
+        }
+
+        class Building {
+            constructor(x, z, width, height, depth) {
+                this.group = new THREE.Group();
+                this.group.position.set(x, 0, z); // Group 原點在地面
+
+                // 主體
+                // BoxGeometry 原點在中心，所以要向上位移 height/2
+                const geo = new THREE.BoxGeometry(width, height, depth);
+                const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(0x999999).offsetHSL(0,0,Math.random()*0.2-0.1) });
+                this.mesh = new THREE.Mesh(geo, mat);
+                this.mesh.position.y = height / 2; 
+                this.mesh.castShadow = true;
+                this.mesh.receiveShadow = true;
+                this.group.add(this.mesh);
+
+                // 窗戶 (修正版)
+                // 窗戶必須依附在 this.mesh 上，所以座標是相對於 mesh 中心的 (0,0,0)
+                // Mesh 的高度範圍是 [ -height/2, height/2 ]
+                const windowMat = new THREE.MeshBasicMaterial({ color: 0x87CEEB });
+                const windowWidth = width * 0.2;
+                const windowHeight = height * 0.1;
+                
+                // 從頂部 (height/2) 往下降一點開始
+                const startY = (height / 2) - windowHeight - 0.5; 
+                
+                for (let i = -1; i <= 1; i += 2) { // 左右兩側牆面
+                    if (Math.random() > 0.3) {
+                        const floorCount = Math.floor(height / (windowHeight * 2));
+                        for (let j = 0; j < floorCount; j++) {
+                            const win = new THREE.Mesh(new THREE.PlaneGeometry(windowWidth, windowHeight), windowMat);
+                            
+                            // 計算 Y 軸：從頂部往下排
+                            const yPos = startY - j * (windowHeight * 2);
+                            
+                            // X 軸偏移：推到牆面 (width/2)
+                            win.position.set((width/2 + 0.05) * i, yPos, 0);
+                            win.rotation.y = Math.PI / 2 * i;
+                            
+                            // 將窗戶加入 Building Mesh，這樣它會跟著 Mesh 移動
+                            this.mesh.add(win); 
+                        }
+                    }
+                }
+                
+                // 煙囪
+                // 傳入 group (讓煙囪知道建築位置) 以及建築尺寸
+                this.chimney = new Chimney(this.group, width, height); 
+                updatables.push(this.chimney);
+
+                scene.add(this.group);
+            }
+        }
+
+        class Chimney {
+            constructor(buildingGroup, bWidth, bHeight) {
+                this.mesh = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.6, 1.5, 0.6),
+                    new THREE.MeshStandardMaterial({ color: 0x884444 })
+                );
+                
+                // 紀錄父層級 (Building Group) 的位置
+                this.buildingPos = buildingGroup.position.clone();
+                
+                // 計算煙囪在屋頂上的「相對」位置 (相對於 Building Group 原點)
+                // Y = bHeight + 0.75 (0.75是煙囪高度一半)
+                this.originalRelPos = new THREE.Vector3(
+                    (Math.random() - 0.5) * (bWidth * 0.6),
+                    bHeight + 0.75,
+                    0
+                );
+
+                this.mesh.castShadow = true;
+                scene.add(this.mesh); // 煙囪直接加到 Scene，方便獨立物理模擬
+                
+                this.isDetached = false;
+                this.velocity = new THREE.Vector3();
+                this.timer = 0;
+                
+                this.reset(); // 初始化位置
+
+                this.smokeSystem = new SmokeSystem(this);
+                updatables.push(this.smokeSystem);
+            }
+
+            update(time, intensity) {
+                if (config.windLevel >= 9 && !this.isDetached) {
+                    if (Math.random() < 0.01 * intensity) {
+                        this.detach();
+                    }
+                }
+
+                if (this.isDetached) {
+                    // 被吹走
+                    this.velocity.x += intensity * 0.02; 
+                    this.velocity.y -= 0.05; // 重力
+                    
+                    this.mesh.position.add(this.velocity);
+                    this.mesh.rotation.z -= 0.1;
+
+                    // 邊界重置
+                    if (this.mesh.position.y < -10 || this.mesh.position.x > 150) {
+                        this.timer += 0.016;
+                        if (this.timer > 3) this.reset();
+                    }
+                }
+            }
+
+            detach() {
+                this.isDetached = true;
+                this.velocity.set(0.2, 0.5, 0);
+            }
+
+            reset() {
+                this.isDetached = false;
+                // 位置 = 建築物世界座標 + 煙囪相對座標
+                this.mesh.position.copy(this.buildingPos).add(this.originalRelPos);
+                this.mesh.rotation.set(0,0,0);
+                this.velocity.set(0,0,0);
+                this.timer = 0;
+            }
+        }
+
+        class SmokeSystem {
+            constructor(chimney) {
+                this.chimney = chimney;
+                this.particles = [];
+                this.geometry = new THREE.SphereGeometry(0.2, 4, 4);
+                this.material = new THREE.MeshBasicMaterial({ color: 0xdddddd, transparent: true, opacity: 0.6 });
+            }
+
+            update(time, intensity) {
+                // 1. 生成粒子
+                // 修正：使用 matrixWorld 獲取煙囪頂端的精確世界座標
+                // 即使煙囪飛走了，粒子也會跟著飛
+                if (this.particles.length < 20) {
+                    // 獲取煙囪 Mesh 目前的世界矩陣
+                    this.chimney.mesh.updateMatrixWorld();
+                    
+                    // 定義煙囪頂部的局部座標 (煙囪高1.5, 中心0, 頂部是0.75)
+                    const tipLocal = new THREE.Vector3(0, 0.75, 0);
+                    
+                    // 轉換為世界座標
+                    const spawnPos = tipLocal.applyMatrix4(this.chimney.mesh.matrixWorld);
+
+                    // 如果煙囪掉到地下太深，就不冒煙了
+                    if (spawnPos.y > -2) {
+                        const p = new THREE.Mesh(this.geometry, this.material.clone());
+                        p.position.copy(spawnPos);
+                        
+                        // 稍微隨機一點出生點
+                        p.position.x += (Math.random()-0.5) * 0.2;
+                        p.position.z += (Math.random()-0.5) * 0.2;
+
+                        scene.add(p);
+                        this.particles.push(p);
+                    }
+                }
+
+                // 2. 更新粒子
+                for (let i = this.particles.length - 1; i >= 0; i--) {
+                    const p = this.particles[i];
+                    
+                    let windX = 0;
+                    let liftY = 0.05;
+
+                    if (config.windLevel === 0) {
+                        windX = (Math.random() - 0.5) * 0.01;
+                    } else {
+                        windX = intensity * 0.15;
+                        liftY = Math.max(0.01, 0.05 - intensity * 0.04);
+                        p.position.z += (Math.random()-0.5) * 0.05 * intensity;
+                    }
+
+                    p.position.x += windX;
+                    p.position.y += liftY;
+                    p.scale.multiplyScalar(1.02);
+                    p.material.opacity -= 0.015;
+
+                    if (p.material.opacity <= 0) { 
+                        scene.remove(p);
+                        this.particles.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        class Pedestrian {
+            constructor(zPos) {
+                this.mesh = new THREE.Group();
+                
+                const bodyMat = new THREE.MeshStandardMaterial({color: Math.random() * 0xffffff});
+                const body = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.8, 0.2), bodyMat);
+                body.position.y = 0.8;
+                const head = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 0.25), new THREE.MeshStandardMaterial({color: 0xffcccc}));
+                head.position.y = 1.4;
+
+                this.mesh.add(body);
+                this.mesh.add(head);
+                
+                // 隨機放在兩側人行道 (X 約為 -8 或 8)
+                this.defaultX = (Math.random() > 0.5 ? 1 : -1) * (7 + Math.random() * 2); 
+                this.mesh.position.set(this.defaultX, 0, zPos);
+                this.mesh.castShadow = true;
+                scene.add(this.mesh);
+
+                this.speed = (Math.random() * 0.05) + 0.02;
+                this.dir = Math.random() > 0.5 ? 1 : -1;
+                this.isBlownAway = false;
+                this.resetTimer = 0;
+            }
+
+            update(time, intensity) {
+                if (this.isBlownAway) {
+                    // 強風吹走
+                    this.mesh.position.x += intensity * 0.3;
+                    this.mesh.rotation.z -= 0.1;
+                    this.mesh.position.y = Math.abs(Math.sin(time * 10)) * 0.5;
+
+                    if (this.mesh.position.x > 100) {
+                        this.resetTimer += 0.016;
+                        if (this.resetTimer > 2) this.reset();
+                    }
+                } else {
+                    if (config.windLevel >= 8) {
+                        this.mesh.rotation.z = -0.3; // 迎風傾斜
+                        if (config.windLevel >= 10) {
+                            this.isBlownAway = true;
+                        } else {
+                            // 阻力移動
+                            this.mesh.position.z += this.speed * this.dir * 0.1; 
+                            this.mesh.position.x += 0.01 * intensity; 
+                        }
+                    } else {
+                        // 正常行走
+                        this.mesh.position.z += this.speed * this.dir;
+                        this.mesh.rotation.x = Math.sin(time * 10) * 0.1;
+                        this.mesh.rotation.z = 0;
+                        
+                        if (this.mesh.position.z > 80 || this.mesh.position.z < -80) this.dir *= -1;
+                    }
+                }
+            }
+
+            reset() {
+                this.isBlownAway = false;
+                this.mesh.position.set(this.defaultX, 0, (Math.random()-0.5)*160);
+                this.mesh.rotation.set(0,0,0);
+                this.resetTimer = 0;
+            }
+        }
+
+        class Vehicle {
+            constructor(zPos) {
+                this.group = new THREE.Group();
+                const carColor = new THREE.Color(Math.random(), Math.random(), Math.random());
+                const bodyMat = new THREE.MeshStandardMaterial({color: carColor});
+
+                const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.7, 0.8), bodyMat);
+                body.position.y = 0.5;
+                body.castShadow = true;
+                this.group.add(body);
+
+                const roof = new THREE.Mesh(new THREE.BoxGeometry(1, 0.4, 0.7), bodyMat);
+                roof.position.set(0, 1.0, 0);
+                roof.castShadow = true;
+                this.group.add(roof);
+
+                const wheelMat = new THREE.MeshStandardMaterial({color: 0x222222});
+                const wheelGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.2, 8);
+                const wheelPositions = [
+                    new THREE.Vector3(0.6, 0.2, 0.4), new THREE.Vector3(-0.6, 0.2, 0.4),
+                    new THREE.Vector3(0.6, 0.2, -0.4), new THREE.Vector3(-0.6, 0.2, -0.4)
+                ];
+                wheelPositions.forEach(pos => {
+                    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+                    wheel.position.copy(pos);
+                    wheel.rotation.x = Math.PI / 2;
+                    this.group.add(wheel);
+                });
+                
+                this.startLaneX = Math.random() > 0.5 ? -3 : 3;
+                this.group.position.set(this.startLaneX, 0, zPos); 
+                this.group.rotation.y = Math.PI / 2 * (this.startLaneX > 0 ? -1 : 1);
+                scene.add(this.group);
+                this.carSpeed = (Math.random() * 0.08) + 0.05;
+                this.isBlownAway = false;
+                this.resetTimer = 0;
+            }
+
+            update(time, intensity) {
+                if (this.isBlownAway) {
+                    this.group.position.x += intensity * 0.3;
+                    this.group.rotation.z -= 0.1;
+                    this.group.position.y = Math.abs(Math.sin(time * 10)) * 0.5;
+                    
+                    if (this.group.position.x > 150) {
+                        this.resetTimer += 0.016;
+                        if (this.resetTimer > 4) this.reset();
+                    }
+                } else {
+                    this.group.position.z += this.carSpeed * (this.group.position.x > 0 ? 1 : -1);
+
+                    if (config.windLevel >= 5) {
+                        const swayAngle = Math.sin(time * 15) * 0.05 * intensity;
+                        this.group.rotation.x = swayAngle;
+                        this.group.position.x += 0.02 * intensity;
+                    } else {
+                        this.group.rotation.x = 0;
+                    }
+
+                    if (config.windLevel >= 10) this.isBlownAway = true;
+
+                    if (Math.abs(this.group.position.z) > 150) {
+                        this.reset();
+                    }
+                }
+            }
+
+            reset() {
+                this.isBlownAway = false;
+                this.group.position.set(this.startLaneX, 0, (this.group.position.z > 0 ? -150 : 150));
+                this.group.rotation.set(0, Math.PI / 2 * (this.group.position.x > 0 ? -1 : 1), 0);
+                this.resetTimer = 0;
+            }
+        }
+
+        class Streetlight {
+            constructor(x, z) {
+                this.group = new THREE.Group();
+                this.group.position.set(x, 0, z);
+
+                const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 5, 8), new THREE.MeshStandardMaterial({color: 0x555555}));
+                pole.position.y = 2.5;
+                pole.castShadow = true;
+                this.group.add(pole);
+
+                const arm = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.1, 0.1), new THREE.MeshStandardMaterial({color: 0x555555}));
+                arm.position.set(0.75 * (x > 0 ? 1 : -1), 4.8, 0);
+                arm.castShadow = true;
+                this.group.add(arm);
+
+                const lightMesh = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshStandardMaterial({color: 0xffffaa, emissive: 0xffffaa}));
+                lightMesh.position.set(1.5 * (x > 0 ? 1 : -1), 4.8, 0);
+                this.group.add(lightMesh);
+
+                scene.add(this.group);
+            }
+        }
+
+        // --- 場景填充 ---
+        function populateScene() {
+            createEnvironment();
+
+            const zoneRadius = 80; 
+            const roadSideDist = 20; 
+
+            // 建築與樹木
+            for (let i = 0; i < 24; i++) {
+                // 隨機分布在道路兩側，避開馬路
+                const side = Math.random() > 0.5 ? 1 : -1;
+                const z = (Math.random() - 0.5) * 2 * zoneRadius;
+                const x = side * (15 + Math.random() * 30);
+
+                if (Math.random() > 0.3) {
+                    // 建築
+                    const w = 5 + Math.random() * 5;
+                    const h = 8 + Math.random() * 20;
+                    const d = 5 + Math.random() * 5;
+                    new Building(x, z, w, h, d);
+                } else {
+                    // 樹
+                    const tree = new Tree(x, z);
+                    updatables.push(tree);
+                }
+            }
+
+            // 額外的行道樹
+            for(let z = -zoneRadius; z <= zoneRadius; z+=15) {
+                const treeL = new Tree(-10, z + Math.random()*5);
+                const treeR = new Tree(10, z + Math.random()*5);
+                updatables.push(treeL);
+                updatables.push(treeR);
+            }
+
+            // 行人 (數量加倍：改為 10)
+            for (let i = 0; i < 10; i++) {
+                const pedestrian = new Pedestrian((Math.random() * 2 - 1) * 100);
+                updatables.push(pedestrian);
+            }
+
+            // 車輛
+            for (let i = 0; i < 10; i++) {
+                const vehicle = new Vehicle((Math.random() * 2 - 1) * 120);
+                updatables.push(vehicle);
+            }
+
+            // 路燈
+            for (let z = -zoneRadius; z <= zoneRadius; z += 25) {
+                new Streetlight(6, z);
+                new Streetlight(-6, z);
+            }
+        }
+
+        // --- GUI 與控制 ---
+        function setupGUI() {
+            const gui = new GUI({ title: '風力控制', width: 300 });
+            gui.add(config, 'windLevel', 0, 12, 1).name('風級 (Level)').onChange(updateWindEffects);
+            updateWindEffects(config.windLevel);
+        }
+
+        function updateWindEffects(level) {
+            const windData = beaufortScale[level];
+            
+            config.description = windData.desc;
+            config.windSpeedDisplay = windData.speed_m_s + " m/s";
+            config.windSpeedKnots = windData.speed_knots + " knots";
+
+            document.getElementById('beaufort-level').textContent = level;
+            document.getElementById('speed-m-s').textContent = config.windSpeedDisplay;
+            document.getElementById('speed-knots').textContent = config.windSpeedKnots;
+            document.getElementById('beaufort-description').textContent = windData.desc;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        window.addEventListener('resize', onWindowResize);
+
+        // --- Main Loop ---
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = clock.getElapsedTime();
+            const intensity = beaufortScale[config.windLevel].intensity;
+
+            controls.update();
+
+            updatables.forEach(item => {
+                if (item.update) item.update(time, intensity);
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        populateScene();
+        setupGUI();
+        animate();
+    </script>
+</body>
+</html>
